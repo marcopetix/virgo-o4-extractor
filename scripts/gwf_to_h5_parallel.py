@@ -285,6 +285,7 @@ class ParallelConfig:
     stagger_seconds: int = 5
     mem_guard_mb: int = 0
     dry_run: bool = False
+    compression: str = "gzip"
 
     # Worker entrypoint (override for tests)
     worker_path: Path = Path("scripts/gwf_to_h5_incremental.py")
@@ -325,6 +326,8 @@ def parse_args() -> argparse.Namespace:
                    help="Pass --resume to workers and skip fully completed days")
     p.add_argument("--dry-run", action="store_true", default=False,
                    help="Plan only; do not spawn workers")
+    p.add_argument("--compression", type=str, choices=["gzip", "lzf", "none"], default="gzip",
+                   help="Compression method for the output HDF5 file.")
 
     # Testing/override
     p.add_argument("--worker-path", type=Path, default=Path("scripts/gwf_to_h5_incremental.py"),
@@ -386,6 +389,7 @@ def normalize_config(ns: argparse.Namespace) -> ParallelConfig:
         args_echo=" ".join(os.sys.argv),
         limit_days=ns.limit_days,
         minutes_per_day=ns.minutes_per_day,
+        compression=ns.compression,
     )
 
     # Validate limits
@@ -419,6 +423,7 @@ def echo_run_header(cfg: ParallelConfig, log: logging.Logger) -> None:
         "argv": cfg.args_echo,
         "limit_days": cfg.limit_days,
         "minutes_per_day": cfg.minutes_per_day,
+        "compression": cfg.compression,
     }
     log.info("===== gwf_to_h5_parallel: start =====")
     log.info(json.dumps(payload, indent=2))
@@ -478,6 +483,7 @@ def build_worker_cmd(cfg: ParallelConfig, d: date) -> list[str]:
         "--out", str(cfg.out_dir),
         "--append-interval", str(cfg.append_interval),
         "--log-level", cfg.log_level,
+        "--compression", cfg.compression,
     ]
     if cfg.resume:
         cmd.append("--resume")
@@ -556,7 +562,7 @@ def supervise(cfg: ParallelConfig, log: logging.Logger) -> None:
             return False
         ensure_day_dir(cfg.out_dir, d)
         cmd = build_worker_cmd(cfg, d)
-        fout = open(day_dir(cfg.out_dir, d) / "worker.log", "ab", buffering=0)
+        fout = open(day_dir(cfg.out_dir, d) / "worker.outer.log", "ab", buffering=0)
         proc = subprocess.Popen(cmd, stdout=fout, stderr=subprocess.STDOUT)
         running[d] = (proc, fout)
         idx_local = mark_running(idx, d, pid=proc.pid)

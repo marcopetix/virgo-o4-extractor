@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import logging
 import sys
 import signal
@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 import subprocess
 from typing import Optional, List, Tuple, Set, Dict, Any
-from datetime import datetime, timezone, timedelta
+from collections import defaultdict
 import tempfile
 import numpy as np
 import h5py
@@ -71,10 +71,12 @@ class Config:
     dry_run: bool
     log_level: str  # 'INFO' | 'DEBUG'
 
+    # Compression policy
+    compression: str 
+    gzip_level: int = 1 if compression == "gzip" else 0
+
     # Fixed policies for v1 (no CLI flags)
     # We still keep them in config for clarity & future-proofing.
-    compression: str = dataclasses.field(default="gzip")   # fixed
-    gzip_level: int = dataclasses.field(default=1)         # fixed
     dtype_policy: str = dataclasses.field(default="keep")  # fixed
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -104,6 +106,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # Output root
     p.add_argument("--out", dest="out_root", type=Path,
                    help="Root output directory where the day folder will be created.", default="/data/procdata/rcsDatasets/OriginalSR/o4_trend_h5")
+    p.add_argument("--compression", type=str, choices=["gzip", "lzf", "none"], default="gzip",
+                   help="Compression method for the output HDF5 file.")
 
     # Behavior
     p.add_argument("--append-interval", type=int, default=100,
@@ -165,8 +169,8 @@ def build_config(args: argparse.Namespace) -> Config:
         dry_run=bool(args.dry_run),
         log_level=args.log_level,
         # Fixed policies for v1:
-        compression="gzip",
-        gzip_level=1,
+        compression=args.compression,
+        gzip_level=1 if args.compression == "gzip" else 0,
         dtype_policy="keep",
     )
 
@@ -564,10 +568,6 @@ def _gwdama_timestamp_now() -> float:
 # HDF5 Writer — gwdama-compatible semantics (ragged, no NaN pad)
 # ============================================================
 
-import h5py
-import numpy as np
-from typing import Dict, Any, Optional, List
-
 class DayAppendH5Writer:
     """
     gwdama-like writer:
@@ -723,8 +723,8 @@ class DayAppendH5Writer:
             maxshape=(None,),
             dtype=dt,
             chunks=(self.append_len,),
-            compression="gzip",
-            compression_opts=1,
+            compression=self.compression,
+            compression_opts=self.gzip_level,
             shuffle=False,
             fletcher32=False,
         )
@@ -860,7 +860,6 @@ def write_day_summary(cfg: Config, writer: DayAppendH5Writer, chunks_done: int, 
     log.info("Summary written: %s", cfg.summary_path)
     return base
 
-from collections import defaultdict
 
 
 def _runs_from_sorted_indices(idxs: List[int]) -> List[List[int]]:
@@ -1197,4 +1196,4 @@ if __name__ == "__main__":
         writer.close()
         update_day_state(cfg, state, status="failed", error=str(e))
         sys.exit(2)
-    # # End of main
+    
