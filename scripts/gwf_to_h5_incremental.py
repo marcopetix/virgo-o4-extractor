@@ -73,7 +73,7 @@ class Config:
 
     # Compression policy
     compression: str 
-    gzip_level: int = 1 if compression == "gzip" else 0
+    gzip_level: int 
 
     # Fixed policies for v1 (no CLI flags)
     # We still keep them in config for clarity & future-proofing.
@@ -717,17 +717,31 @@ class DayAppendH5Writer:
 
         # Create new dataset
         dt = self._effective_dtype(ch_name, example_array)
-        dset = parent.create_dataset(
+
+
+        kwargs = dict(
             name=ch_name,
             shape=(0,),
             maxshape=(None,),
             dtype=dt,
-            chunks=(self.append_len,),
-            compression=self.compression,
-            compression_opts=self.gzip_level,
-            shuffle=False,
-            fletcher32=False,
+            chunks=(self.append_len,),   # keep: one append window per chunk
+            shuffle=True,                # fine for both gzip and lzf
         )
+
+        comp = (self.compression or "").lower()
+        if comp in ("", "none"):
+            pass  # no compression
+        elif comp == "gzip":
+            kwargs["compression"] = "gzip"
+            # ensure gzip_level is an int in [0..9]; default to 1 if None
+            lvl = 1 if self.gzip_level is None else int(self.gzip_level)
+            kwargs["compression_opts"] = lvl
+        elif comp == "lzf":
+            kwargs["compression"] = "lzf"   # IMPORTANT: no compression_opts here
+        else:
+            raise ValueError(f"Unsupported compression: {self.compression}")
+
+        dset = parent.create_dataset(**kwargs)
 
         # Set attrs
         sr = float(sample_rate_hz if sample_rate_hz is not None else self.sample_rate_hz)
