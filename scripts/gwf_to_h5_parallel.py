@@ -328,6 +328,8 @@ def parse_args() -> argparse.Namespace:
                    help="Plan only; do not spawn workers")
     p.add_argument("--compression", type=str, choices=["gzip", "lzf", "none"], default="gzip",
                    help="Compression method for the output HDF5 file.")
+    p.add_argument("--add-pruned", action="store_true",
+                   help="Also write a pruned HDF5 file without all-NaN channels after completion.")
 
     # Testing/override
     p.add_argument("--worker-path", type=Path, default=Path("scripts/gwf_to_h5_incremental.py"),
@@ -424,6 +426,7 @@ def echo_run_header(cfg: ParallelConfig, log: logging.Logger) -> None:
         "limit_days": cfg.limit_days,
         "minutes_per_day": cfg.minutes_per_day,
         "compression": cfg.compression,
+        "add_pruned": cfg.add_pruned,
     }
     log.info("===== gwf_to_h5_parallel: start =====")
     log.info(json.dumps(payload, indent=2))
@@ -487,6 +490,8 @@ def build_worker_cmd(cfg: ParallelConfig, d: date) -> list[str]:
     ]
     if cfg.resume:
         cmd.append("--resume")
+    if cfg.add_pruned:
+        cmd.append("--add-pruned")
     return cmd
 
 

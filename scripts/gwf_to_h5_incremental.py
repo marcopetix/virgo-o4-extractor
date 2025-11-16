@@ -125,6 +125,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="Plan & validate; do not write HDF5.")
     p.add_argument("--log-level", choices=["INFO", "DEBUG"], default="INFO",
                    help="Logging verbosity.")
+    p.add_argument("--add-pruned", action="store_true",
+                   help="Also write a pruned HDF5 file without all-NaN channels after completion.")
 
     return p
 
@@ -179,6 +181,7 @@ def build_config(args: argparse.Namespace) -> Config:
         compression=args.compression,
         gzip_level=1 if args.compression == "gzip" else 0,
         dtype_policy="keep",
+        add_pruned=bool(args.add_pruned),
     )
 
 # Logging and folder setup
@@ -865,7 +868,14 @@ class DayAppendH5Writer:
             "dtype_policy": self.dtype_policy,
         }
     
-def write_day_summary(cfg: Config, writer: DayAppendH5Writer, chunks_done: int, log: logging.Logger, elapsed_seconds: float | None = None) -> dict:
+def write_day_summary(
+    cfg: Config,
+    writer: DayAppendH5Writer,
+    chunks_done: int,
+    log: logging.Logger,
+    elapsed_seconds: float | None = None,
+    channels_all_nan: Optional[list[str]] = None,
+) -> dict:
     base = writer.build_summary()
     base.update({
         "date": cfg.start_dt.date().isoformat(),
@@ -876,21 +886,25 @@ def write_day_summary(cfg: Config, writer: DayAppendH5Writer, chunks_done: int, 
         "seconds_written": int(chunks_done * cfg.append_interval),
         "created_utc": datetime.now(timezone.utc).isoformat(),
     })
+
+    if channels_all_nan is not None:
+        base["n_channels_all_nan"] = len(channels_all_nan)
+        base["channels_all_nan"] = sorted(channels_all_nan)
+
     if elapsed_seconds is not None:
         base["elapsed_seconds"] = round(float(elapsed_seconds), 3)
-        # some derived throughput stats (handy in practice)
         total_bytes = base.get("file_size_bytes", None)
         if total_bytes:
-            base["throughput_mebibytes_per_s"] = round((total_bytes / (1024**2)) / max(elapsed_seconds, 1e-9), 2)
-    
-    # move the "channels" at the end for readability
+            base["throughput_mebibytes_per_s"] = round(
+                (total_bytes / (1024**2)) / max(elapsed_seconds, 1e-9), 2
+            )
+
     ch = base.pop("channels", [])
     base["channels"] = ch
 
     write_json_atomic(cfg.summary_path, base)
     log.info("Summary written: %s", cfg.summary_path)
     return base
-
 
 
 def _runs_from_sorted_indices(idxs: List[int]) -> List[List[int]]:
@@ -915,16 +929,10 @@ def write_coverage_json(
     mini_presence: Dict[str, set[int]],
     n_mini_total: int,
     channels_all: List[str],
-) -> Path:
+) -> tuple[Path, list[str]]:
     """
-    Scrive coverage.json in formato:
-      "V1:FOO": {
-        "mask": "1110111...0",      # '1' = mini-chunk presente, '0' = mancante
-        "missing_chunks": [3, 10],  # indici di mini-chunk mancanti
-        "missing_fraction": 0.05    # frazione di '0' sulla maschera
-      }
-
-    Dove gli indici sono riferiti a mini-chunk di MINI_CHUNK_SECONDS.
+    Restituisce (path_coverage, channels_all_nan), dove channels_all_nan
+    è la lista di canali con missing_fraction == 1.0 (nessuna mini-chunk con dati).
     """
     payload: Dict[str, Any] = {
         "date": cfg.start_dt.date().isoformat(),
@@ -937,15 +945,15 @@ def write_coverage_json(
         "created_utc": datetime.now(timezone.utc).isoformat(),
     }
 
+    channels_all_nan: list[str] = []
+
     if n_mini_total <= 0:
-        # niente da fare, mask vuote
         out_path = cfg.day_folder / "coverage.json"
         write_json_atomic(out_path, payload)
-        return out_path
+        return out_path, channels_all_nan
 
     for ch in channels_all:
         present_idxs = sorted(int(i) for i in mini_presence.get(ch, set()))
-        # costruiamo la mask '1'/'0'
         mask_bits = ["0"] * n_mini_total
         for i in present_idxs:
             if 0 <= i < n_mini_total:
@@ -961,9 +969,18 @@ def write_coverage_json(
             "missing_fraction": round(missing_fraction, 6),
         }
 
+        # canale senza nemmeno una mini-chunk con dati → tutto '0'
+        if missing_fraction >= 1.0:
+            channels_all_nan.append(ch)
+
+    # info riassuntive nel coverage.json stesso (comodo)
+    payload["n_channels_all_nan"] = len(channels_all_nan)
+    payload["channels_all_nan"] = channels_all_nan
+
     out_path = cfg.day_folder / "coverage.json"
     write_json_atomic(out_path, payload)
-    return out_path
+    return out_path, channels_all_nan
+
 
 def write_coverage_heatmap(
     cfg: Config,
@@ -1152,6 +1169,70 @@ def read_chunk_with_retry(
                 return {}, {}
             log.warning("Read failed (retry %d/%d): %s", attempt, retries, e)
 
+def write_pruned_h5(
+    cfg: Config,
+    channels_all_nan: list[str],
+    log: logging.Logger,
+    suffix: str = ".nonan",
+) -> Path:
+    """
+    Crea una copia 'ripulita' dell'HDF5 del giorno, togliendo
+    tutti i canali che sono risultati all-NaN nella finestra
+    (cioè in channels_all_nan).
+
+    Restituisce il path del nuovo file.
+    """
+    import h5py
+
+    src_path = cfg.h5_path
+    dst_path = src_path.with_name(src_path.stem + suffix + src_path.suffix)
+
+    channels_all_nan_set = set(channels_all_nan)
+
+    log.info(
+        "Building pruned HDF5 without %d all-NaN channels: %s",
+        len(channels_all_nan), dst_path,
+    )
+
+    with h5py.File(src_path, "r") as f_in, h5py.File(dst_path, "w") as f_out:
+        # copia attributi di root
+        for k, v in f_in.attrs.items():
+            try:
+                f_out.attrs[k] = v
+            except Exception:
+                pass
+
+        # copia eventuali gruppi non-'channels' (se ne hai)
+        for name, obj in f_in.items():
+            if isinstance(obj, h5py.Group) and name != "channels":
+                f_in.copy(obj, f_out, name=name)
+
+        # copia solo i dataset dei canali "buoni"
+        g_in = f_in.get("channels", None)
+        if g_in is None:
+            log.warning("No /channels group in %s, nothing to prune", src_path)
+            return dst_path
+
+        g_out = f_out.require_group("channels")
+
+        n_total = 0
+        n_kept = 0
+
+        for ch_name, dset in g_in.items():
+            n_total += 1
+            # i dataset sono chiamati con il nome canale, es. "V1:ENV_..."
+            if ch_name in channels_all_nan_set:
+                continue  # questo canale era all-NaN, lo saltiamo
+
+            g_in.copy(dset, g_out, name=ch_name)
+            n_kept += 1
+
+        log.info(
+            "Pruned HDF5 written: kept %d/%d channels (dropped %d all-NaN)",
+            n_kept, n_total, len(channels_all_nan),
+        )
+
+    return dst_path
 
 
 if __name__ == "__main__":
@@ -1350,7 +1431,7 @@ if __name__ == "__main__":
         writer.flush()
         elapsed = time.perf_counter() - t_job_start
 
-        cov_path = write_coverage_json(
+        cov_path, channels_all_nan = write_coverage_json(
             cfg,
             mini_presence=mini_presence,
             n_mini_total=n_mini_total,
@@ -1361,19 +1442,11 @@ if __name__ == "__main__":
             n_mini_total, MINI_CHUNK_SECONDS, cov_path,
         )
 
-         # Log sintetico sui buchi (solo in DEBUG per non esplodere i log)
-        if log.isEnabledFor(logging.DEBUG):
-            from math import isfinite
-            n_with_gaps = 0
-            for ch in channels:
-                ch_cov = mini_presence.get(ch, set())
-                if len(ch_cov) == n_mini_total:
-                    continue  # nessun buco
-                n_with_gaps += 1
-            log.debug(
-                "Coverage summary: %d/%d channels hanno almeno una mini-chunk mancante",
-                n_with_gaps, len(channels),
-            )
+        n_all_nan = len(channels_all_nan)
+        log.info(
+            "Channels with no non-NaN data in this window: %d / %d",
+            n_all_nan, len(channels),
+        )
 
         # Optional: Heatmap coverage per mini-chunk (momentaneamente disabilitata: TODO: migliorare leggibilità)
         # try:
@@ -1389,11 +1462,27 @@ if __name__ == "__main__":
         # except Exception as exc:
         #     log.warning("Impossibile generare la coverage heatmap: %s", exc)
 
-        write_day_summary(cfg, writer, chunks_done=chunks_done, log=log, elapsed_seconds=elapsed)
+        summary = write_day_summary(
+            cfg,
+            writer=writer,
+            chunks_done=chunks_done,
+            log=log,
+            elapsed_seconds=elapsed,
+            channels_all_nan=channels_all_nan,
+        )
         update_day_state(cfg, state, status="completed", error=None)
+
+        # Scrivi il file HDF5 "ripulito" (solo canali con almeno un valore non-NaN)
+        if channels_all_nan and cfg.add_pruned:
+            pruned_path = write_pruned_h5(cfg, channels_all_nan=channels_all_nan, log=log)
+            log.info("Pruned dataset (no all-NaN channels): %s", pruned_path)
+        else:
+            log.info("No all-NaN channels detected; pruned dataset not needed.")
+
         log.info("Finalize: last_completed_chunk=%d, chunks_done=%d, n_chunks=%d",last_completed, chunks_done, n_chunks)
         log.info("Day completed: %s (chunks=%d)", cfg.day_folder, chunks_done)
         writer.close()
+
         sys.exit(0)
 
     except KeyboardInterrupt:
