@@ -20,6 +20,13 @@ from collections import defaultdict
 import tempfile
 import numpy as np
 import h5py
+import matplotlib.pyplot as plt
+
+_HAS_MPL = True
+try:
+    import matplotlib.pyplot as plt
+except ImportError:
+    _HAS_MPL = False
 
 
 
@@ -28,6 +35,7 @@ import h5py
 # =========
 
 ISO_TS_HINT = 'YYYY-MM-DD HH:MM:SS'  # e.g., "2025-08-10 00:00:00"
+MINI_CHUNK_SECONDS = 100          # time window for single gwf file
 
 def _parse_utc(ts: str) -> datetime:
     """
@@ -611,8 +619,9 @@ class DayAppendH5Writer:
             "end_utc": end_utc.isoformat(),
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "append_len_samples": self.append_len,
-            "sample_rate_hz": self.sample_rate_hz,
-            "strategy": "resizable-append-1d (ragged, gwdama-like)",
+            # "sample_rate_hz": self.sample_rate_hz,
+            # "strategy": "resizable-append-1d (ragged, gwdama-like)",
+            "strategy": "resizable-append-1d (padded with np.nan)",
             "compression": f"{self.compression}-{self.gzip_level}",
             "dtype_policy": self.dtype_policy,
         }
@@ -895,32 +904,122 @@ def _runs_from_sorted_indices(idxs: List[int]) -> List[List[int]]:
 
 def write_coverage_json(
     cfg: Config,
-    presence: Dict[str, List[int]],
-    n_chunks: int,
+    mini_presence: Dict[str, set[int]],
+    n_mini_total: int,
     channels_all: List[str],
 ) -> Path:
     """
-    Write per-channel 'present_runs' to coverage.json for later NaN-fill conversion.
-    'presence' maps channel -> sorted list of chunk indices where data was appended.
+    Scrive coverage.json in formato:
+      "V1:FOO": {
+        "mask": "1110111...0",      # '1' = mini-chunk presente, '0' = mancante
+        "missing_chunks": [3, 10],  # indici di mini-chunk mancanti
+        "missing_fraction": 0.05    # frazione di '0' sulla maschera
+      }
+
+    Dove gli indici sono riferiti a mini-chunk di MINI_CHUNK_SECONDS.
     """
     payload: Dict[str, Any] = {
         "date": cfg.start_dt.date().isoformat(),
         "start_utc": cfg.start_dt.isoformat(),
         "end_utc": cfg.end_dt.isoformat(),
         "append_interval_s": int(cfg.append_interval),
-        "n_chunks": int(n_chunks),
+        "mini_chunk_seconds": int(MINI_CHUNK_SECONDS),
+        "n_mini_chunks": int(n_mini_total),
         "channels": {},
         "created_utc": datetime.now(timezone.utc).isoformat(),
     }
+
+    if n_mini_total <= 0:
+        # niente da fare, mask vuote
+        out_path = cfg.day_folder / "coverage.json"
+        write_json_atomic(out_path, payload)
+        return out_path
+
     for ch in channels_all:
-        idxs = sorted(presence.get(ch, []))
-        runs = _runs_from_sorted_indices(idxs)
+        present_idxs = sorted(int(i) for i in mini_presence.get(ch, set()))
+        # costruiamo la mask '1'/'0'
+        mask_bits = ["0"] * n_mini_total
+        for i in present_idxs:
+            if 0 <= i < n_mini_total:
+                mask_bits[i] = "1"
+
+        mask_str = "".join(mask_bits)
+        missing_idxs = [i for i, b in enumerate(mask_bits) if b == "0"]
+        missing_fraction = len(missing_idxs) / float(n_mini_total)
+
         payload["channels"][ch] = {
-            "present_runs": runs,
-            "total_chunks_present": int(sum(l for _, l in runs)),
+            "mask": mask_str,
+            "missing_chunks": missing_idxs,
+            "missing_fraction": round(missing_fraction, 6),
         }
+
     out_path = cfg.day_folder / "coverage.json"
     write_json_atomic(out_path, payload)
+    return out_path
+
+def write_coverage_heatmap(
+    cfg: Config,
+    mini_presence: Dict[str, set[int]],
+    n_mini_total: int,
+    channels_all: List[str],
+) -> Optional[Path]:
+    """
+    Costruisce e salva una heatmap presenza/mancanza dati per canale vs mini-chunk
+    nella stessa cartella di coverage.json.
+
+    Asse X: indice mini-chunk (100 s)
+    Asse Y: indice canale (ordine di channels_all)
+    Valori: 1 = presente, 0 = mancante
+    """
+    if not _HAS_MPL:
+        log.warning("matplotlib non disponibile, salto la generazione della heatmap")
+        return None
+
+    if n_mini_total <= 0 or not channels_all:
+        log.warning("Nessuna mini-chunk o nessun canale, niente heatmap da scrivere")
+        return None
+
+    import numpy as np
+
+    n_channels = len(channels_all)
+    data = np.zeros((n_channels, n_mini_total), dtype=float)
+
+    # costruiamo la matrice 0/1
+    for i, ch in enumerate(channels_all):
+        present = mini_presence.get(ch, set())
+        if not present:
+            continue
+        # clamp per sicurezza
+        for j in present:
+            if 0 <= j < n_mini_total:
+                data[i, j] = 1.0
+
+    # figura
+    fig, ax = plt.subplots(figsize=(max(6, n_mini_total / 50), max(4, n_channels / 10)))
+    im = ax.imshow(
+        data,
+        aspect="auto",
+        interpolation="nearest",
+        origin="lower",
+    )
+
+    ax.set_xlabel(f"mini-chunk (blocchi da {MINI_CHUNK_SECONDS}s)")
+    ax.set_ylabel("canale (indice)")
+    ax.set_title(f"Coverage per mini-chunk - {cfg.start_dt.date().isoformat()}")
+
+    # ticks solo se non sono troppi
+    if n_channels <= 40:
+        ax.set_yticks(range(n_channels))
+        ax.set_yticklabels(range(n_channels))  # oppure direttamente channels_all se brevi
+
+    fig.colorbar(im, ax=ax, label="presenza (1) / mancanza (0)")
+
+    out_path = cfg.day_folder / "coverage_heatmap.png"
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+    log.info("Coverage heatmap scritta in %s", out_path)
     return out_path
 
 
@@ -1004,7 +1103,7 @@ def read_chunk_with_retry(
             result = dm.read_gwdata(
                 start=start_gps, end=end_gps, channels=channels,
                 ffl_spec=ffl_spec, ffl_path=str(ffl_path),
-                return_output=True
+                return_output=True, pad=np.nan, gap="pad"
             )
 
             # Normalize output
@@ -1142,7 +1241,19 @@ if __name__ == "__main__":
     chunks_done = max(0, last_completed + 1)
 
     # per-channel presence tracking
-    presence: Dict[str, List[int]] = defaultdict(list)  # channel -> list of chunk indices
+    mini_presence: Dict[str, set[int]] = defaultdict(set) # channel -> set of mini-chunk indices 
+
+    # quante mini-chunk (100 s) contiene ogni chunk?
+    if cfg.append_interval % MINI_CHUNK_SECONDS != 0:
+        log.warning(
+            "append_interval=%ds non è multiplo di MINI_CHUNK_SECONDS=%ds; "
+            "coverage per mini-chunk sarà approssimativa.",
+            cfg.append_interval, MINI_CHUNK_SECONDS,
+        )
+    mini_per_chunk = max(1, cfg.append_interval // MINI_CHUNK_SECONDS)
+
+    # numero totale di mini-chunk coperti dal piano
+    n_mini_total = n_chunks * mini_per_chunk
 
     try:
         for idx in range(start_idx, n_chunks):
@@ -1170,20 +1281,98 @@ if __name__ == "__main__":
             _ = writer.append_chunk(data_by_ch, meta_by_ch, chunk_t0_utc=t0)
             writer.flush()
 
-            # Record presence for channels that actually returned data in this chunk
-            for ch in data_by_ch.keys():
-                presence[ch].append(idx)
+            # --- Coverage a livello mini-chunk (100 s) per canale ---
+            # global offset per le mini-chunk di questo chunk
+            chunk_mini_offset = idx * mini_per_chunk
+
+            for ch, arr in data_by_ch.items():
+                md = meta_by_ch.get(ch, {})
+                sr = float(md.get("sample_rate", ASSUMED_TREND_SAMPLE_RATE))
+                if sr <= 0:
+                    sr = ASSUMED_TREND_SAMPLE_RATE
+
+                # numero di campioni per mini-chunk = 100 s * sample_rate
+                samples_per_mini = int(round(MINI_CHUNK_SECONDS * sr))
+                if samples_per_mini <= 0:
+                    continue
+
+                arr = np.asarray(arr)
+                n_samples = arr.shape[0]
+
+                # quante mini-chunk "piene" possiamo derivare da questo chunk?
+                n_mini_here = min(
+                    mini_per_chunk,
+                    n_samples // samples_per_mini
+                )
+
+                for j in range(n_mini_here):
+                    start = j * samples_per_mini
+                    stop = start + samples_per_mini
+                    segment = arr[start:stop]
+
+                    # se TUTTO NaN -> consideriamo la mini-chunk mancante
+                    # NB: np.isnan su dtype non float può dare errori, per sicurezza cast a float
+                    try:
+                        segment_f = segment.astype("float64", copy=False)
+                        all_nan = np.all(np.isnan(segment_f))
+                    except Exception:
+                        # se non possiamo testare i NaN, consideriamo "presente"
+                        all_nan = False
+
+                    global_mini_idx = chunk_mini_offset + j
+
+                    if not all_nan:
+                        # segna mini-chunk presente per questo canale
+                        mini_presence[ch].add(global_mini_idx)
+                    # se all_nan: la mini-chunk resta "mancante" e non viene aggiunta
+
 
             # Advance resume pointer AFTER successful flush
             update_day_state(cfg, state, last_completed_chunk=idx, status="running")
             last_completed = idx
             chunks_done = last_completed + 1
 
-        # Completed all chunks
         writer.flush()
         elapsed = time.perf_counter() - t_job_start
-        cov_path = write_coverage_json(cfg, presence, n_chunks=n_chunks, channels_all=channels)
-        log.info("Coverage written: %s", cov_path)
+
+        cov_path = write_coverage_json(
+            cfg,
+            mini_presence=mini_presence,
+            n_mini_total=n_mini_total,
+            channels_all=channels,
+        )
+        log.info(
+            "Coverage written (mini-chunks=%d x %ds): %s",
+            n_mini_total, MINI_CHUNK_SECONDS, cov_path,
+        )
+
+         # Log sintetico sui buchi (solo in DEBUG per non esplodere i log)
+        if log.isEnabledFor(logging.DEBUG):
+            from math import isfinite
+            n_with_gaps = 0
+            for ch in channels:
+                ch_cov = mini_presence.get(ch, set())
+                if len(ch_cov) == n_mini_total:
+                    continue  # nessun buco
+                n_with_gaps += 1
+            log.debug(
+                "Coverage summary: %d/%d channels hanno almeno una mini-chunk mancante",
+                n_with_gaps, len(channels),
+            )
+
+        # Optional: Heatmap coverage per mini-chunk
+        try:
+            heat_path = write_coverage_heatmap(
+                cfg,
+                mini_presence=mini_presence,
+                n_mini_total=n_mini_total,
+                channels_all=channels,
+            )
+            if heat_path is not None:
+                log.info("Coverage heatmap saved: %s", heat_path)
+        except Exception as exc:
+            log.warning("Impossibile generare la coverage heatmap: %s", exc)
+
         write_day_summary(cfg, writer, chunks_done=chunks_done, log=log, elapsed_seconds=elapsed)
         update_day_state(cfg, state, status="completed", error=None)
         log.info("Finalize: last_completed_chunk=%d, chunks_done=%d, n_chunks=%d",last_completed, chunks_done, n_chunks)
