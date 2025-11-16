@@ -229,9 +229,9 @@ def setup_logging(cfg: Config) -> logging.Logger:
     # Small header with key config fields
     logger.info("===== gwf_to_h5_incremental: start =====")
     logger.info(
-        "Window: %s → %s | append_interval=%ss | resume=%s | dry_run=%s | level=%s",
+        "Window: %s → %s | append_interval=%ss | resume=%s | dry_run=%s | level=%s | add_pruned=%s",
         cfg.start_dt.isoformat(), cfg.end_dt.isoformat(),
-        cfg.append_interval, cfg.resume, cfg.dry_run, cfg.log_level,
+        cfg.append_interval, cfg.resume, cfg.dry_run, cfg.log_level, cfg.add_pruned,
     )
     logger.info(
         "Channels: %s | FFL: [%s] %s | Out: %s",
@@ -1445,7 +1445,7 @@ if __name__ == "__main__":
 
         n_all_nan = len(channels_all_nan)
         log.info(
-            "Channels with no non-NaN data in this window: %d / %d",
+            "Channels with only NaN data: %d / %d",
             n_all_nan, len(channels),
         )
 
@@ -1474,7 +1474,7 @@ if __name__ == "__main__":
         update_day_state(cfg, state, status="completed", error=None)
 
         # Scrivi il file HDF5 "ripulito" (solo canali con almeno un valore non-NaN)
-        if channels_all_nan and cfg.add_pruned:
+        if len(channels_all_nan) > 0 and cfg.add_pruned:
             pruned_path = write_pruned_h5(cfg, channels_all_nan=channels_all_nan, log=log)
             log.info("Pruned dataset (no all-NaN channels): %s", pruned_path)
         else:
