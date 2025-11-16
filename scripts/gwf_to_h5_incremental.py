@@ -1477,6 +1477,21 @@ if __name__ == "__main__":
         if len(channels_all_nan) > 0 and cfg.add_pruned:
             pruned_path = write_pruned_h5(cfg, channels_all_nan=channels_all_nan, log=log)
             log.info("Pruned dataset (no all-NaN channels): %s", pruned_path)
+            # scrivi un file di summary anche per il pruned
+            pruned_summary = summary.copy()
+            pruned_summary["path"] = str(pruned_path)
+            pruned_summary["n_channels_all_nan"] = 0
+            pruned_summary["channels_all_nan"] = []
+            write_json_atomic(
+                pruned_path.with_name(pruned_path.stem + ".summary.json"),
+                pruned_summary
+            )
+            # scrivi una lista dei canali rimossi
+            removed_list_path = pruned_path.with_name(pruned_path.stem + ".removed_channels.txt")
+            with removed_list_path.open("w", encoding="utf-8") as f:
+                for ch in sorted(channels_all_nan):
+                    f.write(f"{ch}\n")  
+            log.info("List of removed all-NaN channels written: %s", removed_list_path)
         else:
             log.info("No all-NaN channels detected; pruned dataset not needed.")
 
