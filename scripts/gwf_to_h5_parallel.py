@@ -286,6 +286,7 @@ class ParallelConfig:
     mem_guard_mb: int = 0
     dry_run: bool = False
     compression: str = "gzip"
+    add_pruned: bool = False
 
     # Worker entrypoint (override for tests)
     worker_path: Path = Path("scripts/gwf_to_h5_incremental.py")
@@ -392,6 +393,7 @@ def normalize_config(ns: argparse.Namespace) -> ParallelConfig:
         limit_days=ns.limit_days,
         minutes_per_day=ns.minutes_per_day,
         compression=ns.compression,
+        add_pruned=bool(ns.add_pruned),
     )
 
     # Validate limits
