@@ -77,6 +77,7 @@ class Config:
     resume: bool
     dry_run: bool
     log_level: str  # 'INFO' | 'DEBUG'
+    add_pruned: bool  # write pruned HDF5 without all-NaN channels
 
     # Compression policy
     compression: str 
