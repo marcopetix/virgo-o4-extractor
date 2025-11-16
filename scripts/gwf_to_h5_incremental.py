@@ -20,7 +20,6 @@ from collections import defaultdict
 import tempfile
 import numpy as np
 import h5py
-import matplotlib.pyplot as plt
 
 _HAS_MPL = True
 try:
@@ -291,19 +290,28 @@ def load_channels(channels_file: Path) -> List[str]:
 
 def build_chunk_plan(start_dt: datetime, end_dt: datetime, step_seconds: int) -> List[Tuple[datetime, datetime]]:
     """
-    Generate [t0, t1) intervals of length 'step_seconds' covering [start_dt, end_dt).
-    The last chunk is dropped if it would exceed 'end_dt' (strict coverage).
+    Generate [t0, t1) intervals covering [start_dt, end_dt).
+
+    - I chunk interi hanno durata 'step_seconds'
+    - L'ultimo chunk può essere più corto se non ci sta un altro step completo.
     """
     plan: List[Tuple[datetime, datetime]] = []
+    if end_dt <= start_dt:
+        return plan
+
     cur = start_dt
-    delta = timedelta(seconds=step_seconds)  # needs timedelta import
-    while True:
+    delta = timedelta(seconds=step_seconds)
+
+    while cur < end_dt:
         t1 = cur + delta
         if t1 > end_dt:
-            break
+            # ultimo chunk parziale
+            t1 = end_dt
         plan.append((cur, t1))
         cur = t1
+
     return plan
+
 
 # ===== Validation constants (v1 simple) =====
 VALIDATION_SCAN_LIMIT = 3         # uniformly spread frames to scan
@@ -573,7 +581,7 @@ def _gwdama_timestamp_now() -> float:
     return utc_to_gps(now_utc)
 
 # ============================================================
-# HDF5 Writer — gwdama-compatible semantics (ragged, no NaN pad)
+# HDF5 Writer — gwdama-compatible semantics (append-only, Nan-padded)
 # ============================================================
 
 class DayAppendH5Writer:
@@ -581,7 +589,7 @@ class DayAppendH5Writer:
     gwdama-like writer:
       - /channels/<channel> datasets
       - attrs: channel, sample_rate (Hz), t0 (GPS), unit (optional)
-      - append only the samples we have; no NaN padding for gaps
+      - append only the samples we have; NaN padding for gaps
     """
 
     def __init__(
@@ -783,7 +791,7 @@ class DayAppendH5Writer:
         chunk_t0_utc: Optional[datetime] = None,
     ) -> Dict[str, int]:
         """
-        Append one window for channels present in data_by_ch (no NaN padding).
+        Append one window for channels present in data_by_ch (with NaN padding).
         Returns per-channel written sample counts.
         """
         if self._h5 is None:
@@ -962,6 +970,7 @@ def write_coverage_heatmap(
     mini_presence: Dict[str, set[int]],
     n_mini_total: int,
     channels_all: List[str],
+    log: logging.Logger,
 ) -> Optional[Path]:
     """
     Costruisce e salva una heatmap presenza/mancanza dati per canale vs mini-chunk
@@ -1250,10 +1259,12 @@ if __name__ == "__main__":
             "coverage per mini-chunk sarà approssimativa.",
             cfg.append_interval, MINI_CHUNK_SECONDS,
         )
+    total_seconds = int((cfg.end_dt - cfg.start_dt).total_seconds())
     mini_per_chunk = max(1, cfg.append_interval // MINI_CHUNK_SECONDS)
 
-    # numero totale di mini-chunk coperti dal piano
-    n_mini_total = n_chunks * mini_per_chunk
+    # numero di mini-chunk completi da MINI_CHUNK_SECONDS
+    n_mini_total = total_seconds // MINI_CHUNK_SECONDS
+
 
     try:
         for idx in range(start_idx, n_chunks):
@@ -1283,7 +1294,9 @@ if __name__ == "__main__":
 
             # --- Coverage a livello mini-chunk (100 s) per canale ---
             # global offset per le mini-chunk di questo chunk
-            chunk_mini_offset = idx * mini_per_chunk
+            # dove t0 è il timestamp di inizio chunk
+            offset_seconds = int((t0 - cfg.start_dt).total_seconds())
+            chunk_mini_offset = offset_seconds // MINI_CHUNK_SECONDS
 
             for ch, arr in data_by_ch.items():
                 md = meta_by_ch.get(ch, {})
@@ -1320,6 +1333,8 @@ if __name__ == "__main__":
                         all_nan = False
 
                     global_mini_idx = chunk_mini_offset + j
+                    if global_mini_idx >= n_mini_total:
+                        break
 
                     if not all_nan:
                         # segna mini-chunk presente per questo canale
@@ -1360,18 +1375,19 @@ if __name__ == "__main__":
                 n_with_gaps, len(channels),
             )
 
-        # Optional: Heatmap coverage per mini-chunk
-        try:
-            heat_path = write_coverage_heatmap(
-                cfg,
-                mini_presence=mini_presence,
-                n_mini_total=n_mini_total,
-                channels_all=channels,
-            )
-            if heat_path is not None:
-                log.info("Coverage heatmap saved: %s", heat_path)
-        except Exception as exc:
-            log.warning("Impossibile generare la coverage heatmap: %s", exc)
+        # Optional: Heatmap coverage per mini-chunk (momentaneamente disabilitata: TODO: migliorare leggibilità)
+        # try:
+        #     heat_path = write_coverage_heatmap(
+        #         cfg,
+        #         mini_presence=mini_presence,
+        #         mini_total=n_mini_total,
+        #         channels_all=channels,
+        #         log=log,
+        #     )
+        #     if heat_path is not None:
+        #         log.info("Coverage heatmap saved: %s", heat_path)
+        # except Exception as exc:
+        #     log.warning("Impossibile generare la coverage heatmap: %s", exc)
 
         write_day_summary(cfg, writer, chunks_done=chunks_done, log=log, elapsed_seconds=elapsed)
         update_day_state(cfg, state, status="completed", error=None)
