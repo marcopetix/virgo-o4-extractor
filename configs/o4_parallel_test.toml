@@ -17,7 +17,7 @@ ffl_path      = "/virgoData/ffl/trend.ffl"
 # =========
 # Output settings
 # =========
-out_dir = "/data/procdata/rcsDatasets/OriginalSR/o4_trend_h5"
+out_dir = "/data/procdata/rcsDatasets/OriginalSR/o4_trend_h5_test"
 
 # =========
 # Behavior settings
