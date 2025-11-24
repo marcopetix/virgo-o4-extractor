@@ -46,4 +46,4 @@ dry_run         = false
 limit_days      = 2     # e.g. run only the first 2 eligible days
 minutes_per_day = 30    # extract only the first 30 minutes of each day
 
-worker_path = "scripts/gwf_to_h5_incremental.py"
+worker_path = "scripts/incremental_conversion.py"
