@@ -432,7 +432,6 @@ class ParallelConfig:
     mem_guard_mb: int = 0            # 0 = disabled
     dry_run: bool = False
     compression: str = "gzip"        # currently not forwarded to worker CLI
-    add_pruned: bool = False         # currently not used by worker
 
     # Worker entrypoint (override for tests / custom layout)
     worker_path: Path = Path("scripts/incremental_conversion.py")
@@ -600,7 +599,6 @@ def initialize_config_from_args_parallel(ns: argparse.Namespace) -> ParallelConf
         limit_days=int(ns.limit_days),
         minutes_per_day=int(ns.minutes_per_day),
         compression=str(ns.compression),
-        add_pruned=bool(ns.add_pruned),
     )
 
     # Validate limits
@@ -657,7 +655,6 @@ def initialize_config_from_dict_parallel(cfg_dict: Dict[str, Any]) -> ParallelCo
     limit_days = int(cfg_dict.get("limit_days", 0))
     minutes_per_day = int(cfg_dict.get("minutes_per_day", 0))
     compression = str(cfg_dict.get("compression", "gzip"))
-    add_pruned = bool(cfg_dict.get("add_pruned", False))
 
     cfg = ParallelConfig(
         start_date=start_date,
@@ -675,12 +672,11 @@ def initialize_config_from_dict_parallel(cfg_dict: Dict[str, Any]) -> ParallelCo
         mem_guard_mb=mem_guard_mb,
         dry_run=dry_run,
         worker_path=worker_path.resolve(),
-        run_utc_started=datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        run_utc_started=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         args_echo="(from parallel config file)",
         limit_days=limit_days,
         minutes_per_day=minutes_per_day,
         compression=compression,
-        add_pruned=add_pruned,
     )
 
     # Validate limits
