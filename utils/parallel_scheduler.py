@@ -75,7 +75,6 @@ def echo_run_header(cfg: ParallelConfig, log: logging.Logger) -> None:
         "limit_days": cfg.limit_days,
         "minutes_per_day": cfg.minutes_per_day,
         "compression": cfg.compression,
-        "add_pruned": cfg.add_pruned,
     }
     log.info("===== parallel conversion: start =====")
     log.info(json.dumps(payload, indent=2))
@@ -155,7 +154,7 @@ def build_worker_cmd(cfg: ParallelConfig, d: date) -> list[str]:
     if cfg.resume:
         cmd.append("--resume")
 
-    # NOTE: we do not pass compression or add_pruned to the worker yet,
+    # NOTE: we do not pass compression to the worker yet,
     # because the incremental worker parser currently has no such flags.
 
     return cmd
