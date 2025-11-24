@@ -264,7 +264,6 @@ def write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
             pass
         raise
 
-
 def load_channels(channels_file: Path) -> List[str]:
     """
     Load channel names from a TXT file.
@@ -514,7 +513,6 @@ def quick_probe_read(
         if log:
             log.warning("Probe read failed: %s", e)
     return info
-
 
 def write_validation_json(cfg: Config, channels: List[str], log: logging.Logger) -> None:
     start_gps = utc_to_gps(cfg.start_dt)

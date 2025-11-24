@@ -1,0 +1,54 @@
+# parallel_run.toml
+# Parallel launcher configuration for full O4 trend extraction
+
+# =========
+# Time settings (parallel)
+# =========
+# Inclusive date range for daily workers
+start_date = "2024-04-10"
+end_date   = "2025-11-18"
+
+# =========
+# Input settings
+# =========
+channels_file = "channels/o4_channels.txt"
+ffl_spec      = "V1trend"
+ffl_path      = "/virgoData/ffl/trend.ffl"
+
+# =========
+# Output settings
+# =========
+# Root directory where per-day folders {ffl_spec}-YYYY-MM-DD will be created
+out_dir = "/data/procdata/rcsDatasets/OriginalSR/o4_trend_h5_new"
+
+# =========
+# Behavior settings (parallel + worker-facing)
+# =========
+resume    = true          # skip days whose state_day.json says 'completed'
+log_level = "INFO"        # parallel launcher log level
+
+# =========
+# Extraction settings (forwarded to worker)
+# =========
+increment_size = 600     # seconds (maps to --increment-size for each worker)
+max_retries     = 3       # max worker retries per day
+
+# This is recorded in the parallel config; actual compression is handled in the worker.
+compression = "lzf"
+
+# Worker-level knob (not used by parallel initializer, but kept for documentation)
+produce_summary = true
+
+# =========
+# Parallel-only tuning
+# =========
+concurrency      = 8      # number of concurrent days (workers)
+stagger_seconds  = 5      # delay between spawns
+mem_guard_mb     = 0      # 0 = no memory guard
+dry_run          = false  # set true if you want to only plan but not spawn
+
+# Limit/smoke-test knobs are disabled for the real run
+limit_days      = 0       # 0 = no limit
+minutes_per_day = 0       # 0 = full day
+
+worker_path = "scripts/incremental_conversion.py"
