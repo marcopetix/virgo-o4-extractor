@@ -252,40 +252,66 @@ class IncrementalDataExtractor:
                 dm = GwDataManager()
                 # Read data with padding for gaps
                 result = dm.read_gwdata(
-                    start=t0, end=t1, channels=self.channels,
-                    ffl_spec=self.config.ffl_spec, ffl_path=self.config.ffl_path,
-                    return_output=True, pad=np.nan, gap="pad"
+                    start=t0, 
+                    end=t1, 
+                    channels=self.channels,
+                    ffl_spec=self.config.ffl_spec, 
+                    ffl_path=self.config.ffl_path,
+                    return_output=True, 
+                    pad=np.nan, 
+                    gap="pad"
                 )
 
                 # Normalize output
-                if isinstance(result, tuple):
-                    data_dict = result[0]
-                    meta_dict = result[1] if len(result) > 1 and isinstance(result[1], dict) else {}
-                else:
-                    data_dict = result
-                    meta_dict = {}
+                data_by_ch: Dict[str, np.ndarray] = {}
+                meta_by_ch: Dict[str, dict] = {}
 
-                data_by_ch: Dict[str, np.ndarray] = {}  # channel → data array
-                meta_by_ch: Dict[str, dict] = {}        # channel → metadata dict
+                # gwdama returns an h5py.Group for multiple channels
+                if isinstance(result, h5py.Group):
+                    group = result
+                    for ch in self.channels:
+                        if ch not in group:
+                            continue
+                        dset = group[ch]
+                        try:
+                            arr = np.asarray(dset[...])
+                        except Exception:
+                            continue
+                        if arr.ndim != 1:
+                            continue
+                        data_by_ch[ch] = arr
+                        sr = dset.attrs.get("sample_rate", np.nan)
+                        unit = dset.attrs.get("unit", None)
+                        try:
+                            sr = float(sr)
+                        except Exception:
+                            sr = np.nan
+                        meta_by_ch[ch] = {
+                            "sample_rate": sr,
+                            "unit": unit,
+                        }
 
-                # Extract per-channel data and metadata
-                for ch in self.channels:
-                    arr = data_dict.get(ch, None)
-                    if arr is None:
-                        continue
-                    try:
-                        arr = np.asarray(arr)
-                    except Exception:
-                        continue
-                    if arr.ndim != 1:
-                        continue  # v1: expect 1-D vectors
-                    data_by_ch[ch] = arr
-                    md = meta_dict.get(ch, {})
-                    meta_by_ch[ch] = {
-                        "sample_rate": float(md.get("sample_rate", np.nan)),
-                        "unit": md.get("unit", None),
-                    }
+                # Single-channel case (just in case)
+                elif isinstance(result, h5py.Dataset):
+                    dset = result
+                    ch = dset.attrs.get("channel", None) or (self.channels[0] if self.channels else "unknown")
+                    arr = np.asarray(dset[...])
+                    if arr.ndim == 1:
+                        data_by_ch[ch] = arr
+                        sr = dset.attrs.get("sample_rate", np.nan)
+                        unit = dset.attrs.get("unit", None)
+                        try:
+                            sr = float(sr)
+                        except Exception:
+                            sr = np.nan
+                        meta_by_ch[ch] = {
+                            "sample_rate": sr,
+                            "unit": unit,
+                        }
 
+                # If nothing readable
+                if not data_by_ch:
+                    self.logger.warning("No data read from gwdama for [%d, %d)", t0, t1)
                 return data_by_ch, meta_by_ch
 
             except Exception as e:
@@ -515,30 +541,29 @@ class IncrementalDataExtractor:
             self.summary.pruned_channels_list.extend(pruned)
 
     def compute_gwf_presence(self, t0, data_by_ch, meta_by_ch) -> None:
-        # Update presence tracking for summary (this works on the gwf files level) -> 
         gwf_index = (t0 - self.start_gps) // GWF_FILE_COVERAGE_SECONDS
         for ch, arr in data_by_ch.items():
             channel_sample_rate = meta_by_ch.get(ch, {}).get("sample_rate", None)
-            # Handle NaN or None sample_rate safely
+
             if (
                 channel_sample_rate is None
-                or isinstance(channel_sample_rate, float) and not math.isfinite(channel_sample_rate)
+                or (isinstance(channel_sample_rate, float) and not math.isfinite(channel_sample_rate))
+                or channel_sample_rate <= 0
             ):
                 samples_per_gwf = 0
             else:
                 samples_per_gwf = int(channel_sample_rate * GWF_FILE_COVERAGE_SECONDS)
-            samples_read = len(arr)
 
-            # now we divide the samples into gwf-sized chunks and check presence
+            samples_read = len(arr)
             n_gwf_files_covered = samples_read // samples_per_gwf if samples_per_gwf > 0 else 0
+
             for i in range(n_gwf_files_covered):
                 start = i * samples_per_gwf
                 end = start + samples_per_gwf
                 segment = arr[start:end]
-
-                # if any valid data in segment, mark presence
                 if not np.all(np.isnan(segment)):
                     self.per_channel_presence[ch].add(gwf_index + i)
+
 
     # ---- summary ----
 
