@@ -72,8 +72,8 @@ pip install h5py gwpy numpy tomli
 Clone the repository:
 
 ```bash
-git clone <your_gitlab_or_github_url>
-cd virgo-o4-extractor
+git clone git@git.ligo.org:virgo/sat/satdatasetcreator.git
+cd SATDatasetCreator
 ```
 
 ---
