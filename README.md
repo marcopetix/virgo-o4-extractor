@@ -1,97 +1,260 @@
-<<<<<<< HEAD
-# virgo-o4-extractor
-=======
-# SATDatasetCreator
+# **SAT Dataset Creator**
+
+### Incremental and Parallel GWF → HDF5 Conversion for Virgo O4 Trend & Raw Data
+
+This repository provides a **robust, resumable, parallelizable pipeline** for converting Virgo **GWF** (Gravitational Wave Frame) files into structured **daily HDF5 datasets**.
+
+It supports:
+
+* Incremental extraction with **chunked reading**
+* Automatic **padding of gaps** with NaN
+* Per-channel metadata (sample rate, units, t0)
+* Channel pruning & validation
+* Per-day **coverage**, **summary**, and **statistics**
+* A **parallel scheduler** to process entire O4 ranges
+* Full resume capabilities
+
+The system is based on the Virgo data management ecosystem (**gwdama**, **GWPy**) and reflects the internal naming and data conventions of the Virgo collaboration.
+
+---
+
+# **1. Features**
+
+### ✔️ Incremental single-day extraction (`incremental_conversion.py`)
+
+* Converts a single day of GWF data into `channels/<channel>.h5`
+* Reads in configurable increments (`increment_size`, default: 600 s)
+* Resumes automatically from `state_day.json`
+* Produces:
+
+  * Main HDF5 dataset (`V1trend_YYYYMMDD.h5`)
+  * General summary JSON
+  * Detailed per-channel coverage summary
+  * Lists of valid/invalid/pruned channels
+  * Log file + structured metadata
+
+### ✔️ Parallel multi-day launcher (`parallel_conversion.py`)
+
+* Spawns workers (one per day) with controlled concurrency
+* Retries days on failure
+* Supports smoke-test mode:
+
+  * `limit_days = N`
+  * `minutes_per_day = M`
+* Maintains a global `index.json` of the entire run
+
+### ✔️ Robust data handling
+
+* Handles missing data with NaN padding
+* Uses `gwdama` for reading
+* Ensures dtype consistency
+* Tracks per-channel sample rate, dtype, NaN fraction, and coverage over GWF files
+* Atomically writes all JSON files
+* Full logging (stdout + per-day logs)
+
+---
+
+# **2. Installation**
+
+You need:
+
+* Python 3.10+
+* Virgo IGWN environment (or equivalent)
+* `gwdama` + `gwpy` available in PATH
+* HDF5 libraries (`h5py`)
+
+Install Python packages (example):
+
+```bash
+pip install h5py gwpy numpy tomli
+```
+
+Clone the repository:
+
+```bash
+git clone <your_gitlab_or_github_url>
+cd virgo-o4-extractor
+```
+
+---
+
+# **3. Quickstart**
+
+## **A. Run a single-day extraction (incremental worker)**
+
+You can run the worker using a TOML config file or CLI.
+
+### **Using a TOML config file**
+
+Create `configs/o4_worker.toml`:
+
+```toml
+start_dt = "2024-04-10"
+end_dt   = "2024-04-11"
+
+channels_file = "channels/o4_channels.txt"
+ffl_spec      = "V1trend"
+ffl_path      = "/virgoData/ffl/trend.ffl"
+
+out_root = "/data/procdata/rcsDatasets/OriginalSR/o4_trend_h5"
+
+resume = true
+log_level = "INFO"
+
+increment_size = 600
+max_retries = 3
+compression = "lzf"
+produce_summary = true
+```
+
+Run:
+
+```bash
+python -m scripts.incremental_conversion -c configs/o4_worker.toml
+```
+
+### **Using CLI**
+
+```bash
+python -m scripts.incremental_conversion \
+    --start-dt "2024-04-10 00:00:00" \
+    --end-dt   "2024-04-11 00:00:00" \
+    --channels-file channels/o4_channels.txt \
+    --ffl-path /virgoData/ffl/trend.ffl \
+    --ffl-spec V1trend \
+    --out /data/procdata/rcsDatasets/OriginalSR/o4_trend_h5 \
+    --increment-size 600 \
+    --resume
+```
+
+---
+
+## **B. Run a multi-day parallel extraction**
+
+Use the provided test config:
 
 
+Example:
 
-## Getting started
+```bash
+python -m scripts.parallel_conversion -c configs/o4_parallel_test.toml
+```
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+A full-range extraction:
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+```toml
+start_date = "2024-04-10"
+end_date   = "2025-11-18"
 
-## Add your files
+channels_file = "channels/o4_channels.txt"
+ffl_spec      = "V1trend"
+ffl_path      = "/virgoData/ffl/trend.ffl"
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+out_dir = "/data/procdata/rcsDatasets/OriginalSR/o4_trend_h5"
+
+resume = true
+log_level = "INFO"
+
+increment_size = 600
+concurrency = 8
+stagger_seconds = 5
+max_retries = 3
+```
+
+Run:
+
+```bash
+python -m scripts.parallel_conversion -c configs/o4_parallel.toml
+```
+
+This will spawn up to N concurrent workers, each writing into:
 
 ```
-cd existing_repo
-git remote add origin https://git.ligo.org/virgo/sat/satdatasetcreator.git
-git branch -M main
-git push -uf origin main
+out_dir/V1trend-YYYY-MM-DD/
 ```
 
-## Integrate with your tools
+---
 
-- [ ] [Set up project integrations](https://git.ligo.org/virgo/sat/satdatasetcreator/-/settings/integrations)
+# **4. Output Structure**
 
-## Collaborate with your team
+For each day, the worker produces a folder:
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+```
+out_root/V1trend-2024-04-10/
+```
 
-## Test and Deploy
+Contents:
 
-Use the built-in continuous integration in GitLab.
+```
+V1trend-2024-04-10/
+ ├─ V1trend_20240410.h5          # daily dataset
+ ├─ worker.log                   # detailed log (UTC)
+ ├─ state_day.json               # resume state
+ ├─ V1trend_20240410.summary.json
+ └─ channels_info/
+     ├─ requested_channels.txt
+     ├─ valid_channels.txt
+     ├─ invalid_channels.txt
+     ├─ pruned_channels.txt
+     └─ channels_coverage.json
+```
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+---
 
-***
+# **5. HDF5 Dataset Structure**
 
-# Editing this README
+The main file (e.g. `V1trend_20240410.h5`) contains:
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+```
+/channels/<channel_name> : 1-D float32/float64 array
+```
 
-## Suggestions for a good README
+Attributes per dataset:
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+* `channel`
+* `sample_rate`
+* `unit`
+* `t0` (GPS of first sample)
 
-## Name
-Choose a self-explaining name for your project.
+File-level attributes include start/end time, creation timestamp, increment size, etc.
+(see IncrementalDataExtractor.open() in )
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+---
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+# **6. Summary Files**
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+### **General summary**
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+Location:
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+```
+V1trend-YYYY-MM-DD/V1trend_YYYYMMDD.summary.json
+```
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+Generated by: `build_general_summary()`
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+Contains:
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+* Time window (UTC/GPS)
+* Number of chunks
+* Runtime duration
+* Dataset size
+* Valid/invalid/pruned channels
+* FFL info
+* Increment size
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+### **Channel coverage summary**
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+Generated by: `build_channel_summaries()`
 
-## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
->>>>>>> b33e3c1a35b024c53eed53652bd90ee9fa8418b4
+Includes for each channel:
+
+* sample rate
+* dtype
+* total samples
+* NaN fraction
+* GWF coverage mask (`"101011..."`)
+* Missing fraction
+* Number of gaps
