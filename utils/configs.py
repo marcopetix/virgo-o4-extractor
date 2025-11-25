@@ -114,7 +114,7 @@ def initialize_config_from_dict_incremental(cfg_dict: Dict[str, Any]) -> Extract
         ffl_path=Path(cfg_dict['ffl_path']) if 'ffl_path' in cfg_dict else None,
         resume=cfg_dict.get('resume', False),
         log_level=cfg_dict.get('log_level', 'INFO'),
-        out_root=Path(cfg_dict['out_root']),
+        out_root=Path(cfg_dict['out_root']) or Path(cfg_dict.get('out_dir')),
         day_folder=None,          # to be set later
         dataset_path=None,       # to be set later
         state_path=None,         # to be set later
@@ -626,7 +626,7 @@ def initialize_config_from_dict_parallel(cfg_dict: Dict[str, Any]) -> ParallelCo
     channels_file = Path(cfg_dict["channels_file"])
     ffl_path = Path(cfg_dict["ffl_path"])
     ffl_spec = str(cfg_dict.get("ffl_spec", "V1trend"))
-    out_dir = Path(cfg_dict["out_dir"])
+    out_dir = Path(cfg_dict["out_dir"]) or Path(cfg_dict["out_root"])
 
     # Validate basic things
     if start_date > end_date:

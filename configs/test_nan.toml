@@ -1,0 +1,46 @@
+# =========
+# Time settings
+# =========
+start_date = "2025-09-30"
+end_date   = "2025-09-30"
+
+# =========
+# Input settings
+# =========
+channels_file = "channels/test_nan_channels.txt"
+ffl_spec      = "V1raw"
+ffl_path      = "/virgoData/ffl/raw.ffl"
+
+# =========
+# Output settings
+# =========
+out_dir = "/data/procdata/rcsDatasets/OriginalSR/raw_data_nan_test"
+
+# =========
+# Behavior settings
+# =========
+resume    = true
+log_level = "INFO"
+
+# =========
+# Extraction settings
+# =========
+increment_size = 600   # seconds per chunk
+max_retries     = 1     # for tests, you can keep this low
+
+compression     = "lzf"
+produce_summary = true
+
+# =========
+# Parallel-only tuning for test
+# =========
+concurrency     = 2     # keep small for tests
+stagger_seconds = 5
+mem_guard_mb    = 0
+dry_run         = false
+
+# Only test a few days, and only the first M minutes of each day
+limit_days      = 2     # e.g. run only the first 2 eligible days
+minutes_per_day = 30    # extract only the first 30 minutes of each day
+
+worker_path = "scripts/incremental_conversion.py"

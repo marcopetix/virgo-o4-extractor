@@ -2,3 +2,4 @@
 /scripts/gwf_to_h5_parallel_old.py
 /utils/convert_fixed_length.py
 /tests
+pytest.ini
