@@ -519,7 +519,14 @@ class IncrementalDataExtractor:
         gwf_index = (t0 - self.start_gps) // GWF_FILE_COVERAGE_SECONDS
         for ch, arr in data_by_ch.items():
             channel_sample_rate = meta_by_ch.get(ch, {}).get("sample_rate", None)
-            samples_per_gwf = int(channel_sample_rate * GWF_FILE_COVERAGE_SECONDS) if channel_sample_rate else 0
+            # Handle NaN or None sample_rate safely
+            if (
+                channel_sample_rate is None
+                or isinstance(channel_sample_rate, float) and not math.isfinite(channel_sample_rate)
+            ):
+                samples_per_gwf = 0
+            else:
+                samples_per_gwf = int(channel_sample_rate * GWF_FILE_COVERAGE_SECONDS)
             samples_read = len(arr)
 
             # now we divide the samples into gwf-sized chunks and check presence
